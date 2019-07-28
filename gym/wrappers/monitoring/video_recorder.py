@@ -79,6 +79,7 @@ class VideoRecorder(object):
         self.frames_per_sec = env.metadata.get('video.frames_per_second', 60)
         self.encoder = None # lazily start the process
         self.broken = False
+        self.audio_rate = 32040.5
 
         # Dump metadata
         self.metadata = metadata or {}
@@ -106,7 +107,8 @@ class VideoRecorder(object):
 
         #for frame in frames:
         for i in range(0,4):
-            frame = frames[i]
+            frame = frames[0][i]
+            audio_data = frames[1][i]
             #plt.imshow(frame, cmap='gray', interpolation='nearest')
             #plt.show()
             if frame is None:
@@ -122,7 +124,8 @@ class VideoRecorder(object):
                 if self.ansi_mode:
                     self._encode_ansi_frame(frame)
                 else:
-                    self._encode_image_frame(frame)
+                    #print(audio_data)
+                    self._encode_image_frame(frame, audio_data)
 
     def close(self):
         """Make sure to manually close, or else you'll leak the encoder process"""
@@ -170,13 +173,13 @@ class VideoRecorder(object):
         self.encoder.capture_frame(frame)
         self.empty = False
 
-    def _encode_image_frame(self, frame):
+    def _encode_image_frame(self, frame, audio_data):
         if not self.encoder:
-            self.encoder = ImageEncoder(self.path, frame.shape, self.frames_per_sec)
+            self.encoder = ImageEncoder(self.path, frame.shape, self.frames_per_sec, self.audio_rate)
             self.metadata['encoder_version'] = self.encoder.version_info
 
         try:
-            self.encoder.capture_frame(frame)
+            self.encoder.capture_frame(frame, audio_data)
         except error.InvalidFrame as e:
             logger.warn('Tried to pass invalid video frame, marking as broken: %s', e)
             self.broken = True
@@ -248,7 +251,7 @@ class TextEncoder(object):
         return {'backend':'TextEncoder','version':1}
 
 class ImageEncoder(object):
-    def __init__(self, output_path, frame_shape, frames_per_sec):
+    def __init__(self, output_path, frame_shape, frames_per_sec, audio_rate):
         self.proc = None
         self.output_path = output_path
         # Frame shape should be lines-first, so w and h are swapped
@@ -259,6 +262,7 @@ class ImageEncoder(object):
         self.includes_alpha = (pixfmt == 4)
         self.frame_shape = frame_shape
         self.frames_per_sec = 60 #frames_per_sec
+        self.audio_rate = audio_rate
 
         if distutils.spawn.find_executable('avconv') is not None:
             self.backend = 'avconv'
@@ -291,7 +295,15 @@ class ImageEncoder(object):
                      '-pix_fmt',('rgb32' if self.includes_alpha else 'rgb24'),
                      '-i', '-', # this used to be /dev/stdin, which is not Windows-friendly
 
+                     #'-ar', '%i' % self.audio_rate,
+                     #'-ac', '2',
+                     #'-f', 's8',
+                     #'-probesize', '32',
+                     #'-thread_queue_size', '60',
+                     #'-i', '-',
+
                      # output
+                     '-c:a', 'aac', '-b:a', '128k',
                      '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
                      '-vcodec', 'libx264',
                      '-pix_fmt', 'yuv420p',
@@ -299,12 +311,13 @@ class ImageEncoder(object):
                      )
 
         logger.debug('Starting ffmpeg with "%s"', ' '.join(self.cmdline))
+        
         if hasattr(os,'setsid'): #setsid not present on Windows
             self.proc = subprocess.Popen(self.cmdline, stdin=subprocess.PIPE, preexec_fn=os.setsid)
         else:
             self.proc = subprocess.Popen(self.cmdline, stdin=subprocess.PIPE)
 
-    def capture_frame(self, frame):
+    def capture_frame(self, frame, audio_data):
         if not isinstance(frame, (np.ndarray, np.generic)):
             raise error.InvalidFrame('Wrong type {} for {} (must be np.ndarray or np.generic)'.format(type(frame), frame))
         if frame.shape != self.frame_shape:
@@ -314,8 +327,11 @@ class ImageEncoder(object):
 
         if distutils.version.LooseVersion(np.__version__) >= distutils.version.LooseVersion('1.9.0'):
             self.proc.stdin.write(frame.tobytes())
+            #self.proc.stdin.write(audio_data.tobytes())
+            #self.proc.stdin.write
         else:
             self.proc.stdin.write(frame.tostring())
+            #self.proc.stdin.write(audio_data.tostring())
 
     def close(self):
         self.proc.stdin.close()
