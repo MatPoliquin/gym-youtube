@@ -9,6 +9,8 @@ from six import StringIO
 import six
 from gym import error, logger
 import matplotlib.pyplot as plt
+import socket
+import time
 
 def touch(path):
     open(path, 'a').close()
@@ -253,7 +255,9 @@ class TextEncoder(object):
 class ImageEncoder(object):
     def __init__(self, output_path, frame_shape, frames_per_sec, audio_rate):
         self.proc = None
+        self.proc_audio = None
         self.output_path = output_path
+        self.output_path_audio = output_path + '_audio.mp4'
         # Frame shape should be lines-first, so w and h are swapped
         h, w, pixfmt = frame_shape
         if pixfmt != 3 and pixfmt != 4:
@@ -263,6 +267,8 @@ class ImageEncoder(object):
         self.frame_shape = frame_shape
         self.frames_per_sec = 60 #frames_per_sec
         self.audio_rate = audio_rate
+
+        
 
         if distutils.spawn.find_executable('avconv') is not None:
             self.backend = 'avconv'
@@ -283,24 +289,52 @@ class ImageEncoder(object):
         }
 
     def start(self):
+        #try:
+        #    self.video = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        #    self.video.bind(('127.0.0.1', 0))
+        #self.audio = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        #self.audio.bind(('127.0.0.1', 0))
+            
+        #    print('CONNECT TO SOCKETS')
+        #except ConnectionRefusedError:
+        #    print('CONNECTION REFUSED')
+        #    self.video.close()
+        #    if self.audio:
+        #        self.audio.close()
+        #    raise
+
+        #vr = self.video.getsockname()[1]
+        #ar = self.audio.getsockname()[1]
+        #self.video.close()
+        #self.video.connect(('127.0.0.1', vr))
+        #time.sleep(0.2)
+        #self.audio.close()
+        
+        #time.sleep(0.2)
+
+        #print('socket names')
+        #print(vr)
+        #print(ar)
+        #self.audioPipe = os.open("~/OUTPUT/audio.wav", "rw")
+
+
         self.cmdline = (self.backend,
                      '-nostats',
+                     #'-nostdin',
+                     #"-error-resilient", "1",
                      '-loglevel', 'error', # suppress warnings
                      '-y',
                      '-r', '%d' % self.frames_per_sec,
-
+                     
                      # input
                      '-f', 'rawvideo',
                      '-s:v', '{}x{}'.format(*self.wh),
                      '-pix_fmt',('rgb32' if self.includes_alpha else 'rgb24'),
-                     '-i', '-', # this used to be /dev/stdin, which is not Windows-friendly
-
-                     #'-ar', '%i' % self.audio_rate,
-                     #'-ac', '2',
-                     #'-f', 's8',
                      #'-probesize', '32',
-                     #'-thread_queue_size', '60',
-                     #'-i', '-',
+                     #'-thread_queue_size', '10000',
+                     '-i', '-',
+                     #'-map', '0:0',
+
 
                      # output
                      '-c:a', 'aac', '-b:a', '128k',
@@ -310,12 +344,59 @@ class ImageEncoder(object):
                      self.output_path
                      )
 
+        self.cmdline_audio = (self.backend,
+                     '-nostats',
+                     #'-nostdin',
+                     #"-error-resilient", "1",
+                     '-loglevel', 'error', # suppress warnings
+                     '-y',
+                     '-r', '%d' % self.frames_per_sec,
+                     
+                     # input
+                
+
+                     '-ar', '%i' % self.audio_rate,
+                     '-ac', '2',
+                     '-f', 's16le',
+                     '-probesize', '32',
+                     '-thread_queue_size', '60',
+                     '-i', '-',
+      
+                     #'-map', ' 0:0',
+                     #'-map', ' 1:0',
+
+                     # output
+                     '-c:a', 'aac', '-b:a', '128k',
+                     '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+                     '-vcodec', 'libx264',
+                     '-pix_fmt', 'yuv420p',
+                     self.output_path_audio
+                     )
+
+
         logger.debug('Starting ffmpeg with "%s"', ' '.join(self.cmdline))
         
         if hasattr(os,'setsid'): #setsid not present on Windows
             self.proc = subprocess.Popen(self.cmdline, stdin=subprocess.PIPE, preexec_fn=os.setsid)
+            self.proc_audio = subprocess.Popen(self.cmdline_audio, stdin=subprocess.PIPE, preexec_fn=os.setsid)
         else:
             self.proc = subprocess.Popen(self.cmdline, stdin=subprocess.PIPE)
+            self.proc_audio = subprocess.Popen(self.cmdline_audio, stdin=subprocess.PIPE)
+        #os.mkfifo("audio.fifo")
+        #stdout = subprocess.PIPE
+        #self.proc = subprocess.Popen(self.cmdline)
+        #self.proc = subprocess.Popen(self.cmdline)
+        print('OPENED pipe')
+
+        #self.videoPipe = os.open("video.fifo", os.O_WRONLY)
+        #print('OPENED video.fifo')
+        #self.audioPipe = os.open("~/OUTPUT/audio.wav", os.O_WRONLY)
+        #print('OPENED audio.pipe')
+
+        #print('AUDIO START CONNECT')
+        #self.audio.connect(('127.0.0.1', ar))
+        #print('AUDIO CONNECTED')
+
 
     def capture_frame(self, frame, audio_data):
         if not isinstance(frame, (np.ndarray, np.generic)):
@@ -327,7 +408,18 @@ class ImageEncoder(object):
 
         if distutils.version.LooseVersion(np.__version__) >= distutils.version.LooseVersion('1.9.0'):
             self.proc.stdin.write(frame.tobytes())
-            #self.proc.stdin.write(audio_data.tobytes())
+            self.proc_audio.stdin.write(audio_data.tobytes())
+            #print('stdin write audio')
+            #os.write(self.videoPipe, frame.tobytes())
+            #os.write(self.audioPipe, audio_data.tobytes())
+            
+            #self.proc.wait()
+            #print('SEND VIDEO DATA!!!!!!!!!!!!')
+            #time.sleep(0.3)
+            #self.video.sendall(frame.tobytes())
+            #print('SEND AUDIO DATA!!!!!!!!!!!!')
+            #self.audio.sendall(audio_data.tobytes())
+            #print('SEND DATA END!!!!!!!!!!!!')
             #self.proc.stdin.write
         else:
             self.proc.stdin.write(frame.tostring())
@@ -335,6 +427,10 @@ class ImageEncoder(object):
 
     def close(self):
         self.proc.stdin.close()
+        self.proc_audio.stdin.close()
+        #os.close(self.videoPipe)
+        #os.close(self.audioPipe)
+        ret_audio = self.proc_audio.wait()
         ret = self.proc.wait()
-        if ret != 0:
+        if ret != 0 or ret_audio != 0:
             logger.error("VideoRecorder encoder exited with status {}".format(ret))
