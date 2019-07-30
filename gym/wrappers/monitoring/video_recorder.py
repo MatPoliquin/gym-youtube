@@ -11,6 +11,7 @@ from gym import error, logger
 import matplotlib.pyplot as plt
 import socket
 import time
+from baselines.common.broadcast import broadcast
 
 def touch(path):
     open(path, 'a').close()
@@ -81,7 +82,8 @@ class VideoRecorder(object):
         self.frames_per_sec = env.metadata.get('video.frames_per_second', 60)
         self.encoder = None # lazily start the process
         self.broken = False
-        self.audio_rate = 32040.5
+        self.audio_rate = broadcast.audio_rate #self.env.unwrapped.em.get_audio_rate() #32040.5
+        print('AUDIO RATE:%d' % self.audio_rate)
 
         # Dump metadata
         self.metadata = metadata or {}
@@ -265,7 +267,7 @@ class ImageEncoder(object):
         self.wh = (w,h)
         self.includes_alpha = (pixfmt == 4)
         self.frame_shape = frame_shape
-        self.frames_per_sec = 60 #frames_per_sec
+        self.frames_per_sec = frames_per_sec
         self.audio_rate = audio_rate
 
         
@@ -353,17 +355,12 @@ class ImageEncoder(object):
                      '-r', '%d' % self.frames_per_sec,
                      
                      # input
-                
-
                      '-ar', '%i' % self.audio_rate,
                      '-ac', '2',
                      '-f', 's16le',
                      '-probesize', '32',
                      '-thread_queue_size', '60',
                      '-i', '-',
-      
-                     #'-map', ' 0:0',
-                     #'-map', ' 1:0',
 
                      # output
                      '-c:a', 'aac', '-b:a', '128k',
